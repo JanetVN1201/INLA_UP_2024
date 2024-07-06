@@ -1,5 +1,5 @@
 ---
-title: "INLA for environmental sciences - Day 2, areal data modeling"
+title: "INLA for environmental sciences - Day 2, geostatistics modeling"
 author: "Janet van Niekerk (janet.vanNiekerk@kaust.edu.sa)"
 output: html_document
 date: "July 2024"
@@ -72,7 +72,11 @@ plot(nc.adj, coords = nc.sids$geometry,  add = TRUE, col = "blue", cex = 0.2)
 nc.sids$CNTY_ID2 <- 1:(length(nc.sids$CNTY_ID))
 
 #Fit the spatial model
-result1_sids <- 
+result1_sids <- inla(SID74 ~ nwp_hat74 + f(CNTY_ID2, model = "besagproper", graph = B.nc), 
+                     data = as.data.frame(nc.sids), 
+                     family = "poisson",
+                     control.predictor = list(compute = TRUE),
+                     E = E74)
 ```
 The posterior summary is
 ```{r Example 1.e}
@@ -105,7 +109,12 @@ inla.doc("bym2")
 Let's revisit the NC SIDS dataset example.  
 Now we add a BYM effect for the different counties,
 ```{r Example 2.a}
-result2_sids <- 
+result2_sids <- inla(SID74 ~ nwp_hat74 + f(CNTY_ID2, model = "bym2", graph = B.nc), 
+                     data = as.data.frame(nc.sids), 
+                     family = "poisson",
+                     control.compute = list(dic = TRUE, waic = TRUE),
+                     control.predictor = list(compute = TRUE),
+                     E = E74)
 ```
 The posterior summary is
 ```{r Example 2.b}
