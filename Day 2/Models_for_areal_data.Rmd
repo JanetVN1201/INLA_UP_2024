@@ -793,7 +793,7 @@ round(r3a$summary.hyperpar[,c(1,3,5,6)],3)
 
 ```
 
-## Non-stationary Besag model for areal data
+## Example 5 - Non-stationary Besag model for areal data
 The details are available at https://journals.sagepub.com/doi/10.1177/09622802241244613 (arXiv version https://arxiv.org/abs/2306.17236).  
 The joint density function of $\pmb x$ with precision parameters $\tau_1, \tau_2, ...,\tau_P$ is defined as
     \begin{equation}
