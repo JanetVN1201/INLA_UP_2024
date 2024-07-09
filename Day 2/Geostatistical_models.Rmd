@@ -435,7 +435,7 @@ stpred <- matrix(res.jo$summary.fitted.values$mean[idx.zp],
 stpred_y <- matrix(res.jo$summary.fitted.values$mean[idx.yp], 
   spde$n.spde)
 
-par(mfrow = c(4, 2), mar =c(0, 0, 0, 0)) 
+par(mfrow = c(1, 1), mar =c(0, 0, 0, 0)) 
 for (j in 1:m) {
   pj <- inla.mesh.project(pgrid, field = stpred[, j])
   pj[id.out] <- NA
@@ -444,7 +444,7 @@ for (j in 1:m) {
     main = paste0("Day ", j, " - P(rain)"), ylab = "", xlab = "")
 }
 
-par(mfrow = c(4, 2), mar =c(0, 0, 0, 0)) 
+par(mfrow = c(1, 1), mar =c(0, 0, 0, 0)) 
 for (j in 1:m) {
   pj <- inla.mesh.project(pgrid, field = stpred_y[, j])
   pj[id.out] <- NA
@@ -458,6 +458,8 @@ for (j in 1:m) {
 
 
 ```
+
+
 ## Example 3 - SVC
 
 Taken from https://github.com/inlabru-org/inlabru/blob/devel/vignettes/articles/svc.Rmd.
