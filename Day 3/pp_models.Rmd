@@ -1,0 +1,883 @@
+---
+title: "Point Process Modeling using R-INLA"
+author: "Hans Montcho"
+email: "djidenou.montcho@kaust.edu.sa"
+date: "`r Sys.Date()`"
+output: html_document
+code_folding: hide
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+	echo = T,
+	message = FALSE,
+	warning = FALSE
+)
+```
+
+## Introduction 
+
+In this tutorial, I introduce basics of Point Process modeling using the **RINLA** software. I start by defining what a point process is, then I  give examples of Point Patterns which are realizations of a  Point Process. After that, we restrict our attention to the Poisson Point Process and discuss Homogeneous and Non homogeneous version with deterministic and stochastic intensity function. Even though the main goal is to introduce **R-INLA**, I will briefly discuss the **INLABRU** and **METRICGRAPH** libraries, also based on  **R-INLA**, which make it very easy to handle spatial models. Unfortunately, I don't cover exploratory data analysis for PP and if times permit I will discuss model validation or comparison tool for PP.  Finally, this markdown document is also accompanied by a presentation file that provides more background information, light mathematical details whenever necessary, all freely available [here](https://github.com/JanetVN1201/INLA_UP_2024/tree/main/Day%203). 
+
+
+Before diving in,  I would like to mention the most used libraries for fitting (complex) Point Process models: 
+
+1. [**spatstat:**](https://spatstat.org/)  contains PP datasets, functions to  simulate PP, frequentist estimation and inference for PP, tools for model diagnostics, validation and comparison, can also handle PP defined on linear networks.   
+
+2. [**lgcp:**](https://cran.r-project.org/web/packages/lgcp/index.html) allows Bayesian computation for the LGCP using Markov Chain Monte Carlo.     
+
+3. [**RINLA:**](https://www.r-inla.org/home)  Bayesian computational tool for the large class of Latent Gaussian Models.
+
+4. [**INLABRU:**](https://inlabru-org.github.io/inlabru/index.html) facilitates spatial modeling  using the INLA method via the R-INLA package. 
+
+5. [**MetricGraph:**](https://davidbolin.github.io/MetricGraph/articles/pointprocess.html) facilitates spatial modeling on linear network using the INLA method via the R-INLA package.  
+
+
+
+## R Libraries
+
+```{r libraries}
+
+library(spatstat)  ## for point process simulation 
+library(INLA) ## for Bayesian computation 
+library(sf)  ## for handling spatial objects
+library(ggplot2) ## for nice plots
+library(gridExtra) ## arrange plots
+library(inlabru) ## for spatial modeling using INLA
+library(fmesher) ## for mesh  generation
+library(mvtnorm) ## simulate multiva gaussian
+library(raster)  ## for spatial data handling
+library(splancs)
+source('solutions/utils.R')
+```
+
+
+## What is a Point Process ?
+
+Point Process analysis is the  subarea of spatial statistics that deals with events occurring at random locations. It is important to contrast this definition with geostatistics  which is the subarea that handles events occurring at fixed/known locations. In statistical terminology,  a point process (PP) over a space $\boldsymbol{S}$  ($\mathbb{R}^d$  for example)  is a stochastic process from which the realizations, named point pattern, are finite or countable points in $\boldsymbol{S}$.  In this tutorial, we will only study simple point process, for which all locations are distinct with probability one. 
+ 
+
+## Examples of Point Patterns
+The [spatstat](https://spatstat.org/) package provides many [datasets](https://cran.r-project.org/web/packages/spatstat/vignettes/datasets.pdf) to learn about Point pattern:
+
+**beilschmiedia  dataset**
+```{r bei_elevation}
+plot(bei.extra$elev, main='beilschmiedia by elevation')
+points(bei$x, bei$y,cex=0.3, pch=20,col='green')
+```
+
+
+**Gorilla nests dataset**
+
+
+```{r gorilla_vegetation }
+{plot(gorillas.extra$vegetation, main='Gorilla nest across vegetation type' )
+points(spatstat.data::gorillas$x, spatstat.data::gorillas$y, pch=20, cex=0.3,col='green')}
+```
+
+
+**TODO 1:** the gorilla.extra is a list that contains more information (covariates) about the locations of the gorillas' nests. Plot some of these covariates together with the nests' locations and comment the observed pattern.
+
+```{r extra_covariates}
+names(gorillas.extra)
+
+## ADD CODE HERE 
+
+```
+
+
+**Chorley cancer dataset**
+
+```{r lung_cancer}
+{chorley.extra$plotit()
+  axis(1)
+  axis(2)
+legend(x=370,y=425,legend=c('incinerator','larynx','lungs'),fill=c('blue','red','green'))}
+
+
+
+```
+
+
+
+**TODO 2:** Give examples of scientific questions that might be of interest and related to the Chorley cancer dataset. How could you try to answer them using  statistical methods ? 
+
+
+**Point Pattern on Network**
+
+This subarea has seen a recent urge with new methods and dedicated libraries. 
+
+```{r}
+plot(chicago, main="Chicago Crimes", col="grey", cols=c("red", "blue", "black", "blue", "red", "blue", "blue"), 
+     chars=c(16,2,22,17,24,15,6), leg.side="left", show.window=F)
+```
+
+
+
+## Some refresher about the Poisson distribution 
+Let X be a random variable with Poisson distribution with parameter $\lambda > 0$ then: $$P(X=x) =\frac{e^{-\lambda}\lambda^x}{x!} $$
+Moreover $$ E[X] = V(X) = \lambda$$ 
+
+```{r poisson_rv}
+n= 1000
+lambda = 50
+x= rpois(n,lambda)
+hist(x)
+
+
+## change values of lambda and n and lambda. Any pattern ?
+```
+
+
+**TODO 3:** 
+
+1. Create a sequence  $x$ of 10 numbers between $(-1,1)$ using the seq() function.
+
+2. Write a function which receives $x$  as input and returns a simulation from a Poisson distribution with parameter  $\exp(1+x)$. 
+
+3. Plot 3 realizations of your function for your sequence $x$. 
+
+4. Why does the output change every time you run it ?
+
+
+```{r todo_3}
+
+# ADD CODE HERE
+
+```
+
+
+## Poisson Point process 
+
+An important class is the Poisson point process (PPP), with intensity $\lambda(s)$, which is a simple PP such that:
+
+1. The number of points $N(B)$ in any bounded Borel set $B \in \boldsymbol{S}$ is a Poisson random variable with mean $\Lambda(B) = \int_B \lambda(s) ds$ 
+
+2. For any disjoint Borel sets $B_i$ and $B_j \in \boldsymbol{S}$, $N(B_i)$ and $N(B_j)$ are independent random variables. 
+
+
+**TODO 4:**  Derive the likelihood function of a PPP.
+
+```{r}
+## DERIVE IN CLASS 
+```
+
+
+## Classification of PPP
+
+As a consequence of the previous definition,  the PPP is fully determined by the intensity function $\lambda(s)$ and is usually classified in three groups:
+
+
+1. **Homogeneous Poisson Process:** $\lambda(s) =\lambda$ is constant over the  domain $\boldsymbol{S}$. 
+
+2. **Non Homogeneous Poisson Process with deterministic intensity:** $\lambda(s)$ varies as a deterministic function of s over domain $\Omega$.
+
+3. **Cox Process or Non Homogeneous Poisson Process with stochastic intensity:** $\lambda(s)$ varies as a stochastic/random function of s over the domain $\boldsymbol{S}$.
+
+
+
+
+## Homogeneous Poisson Process 
+### Some intuition in 1D
+
+Here, we will simulate HPP in 1D and try to build some intuition about the behavior of the data.
+
+```{r}
+S_1 = c(8,18)
+lambda_1 = 5
+
+#TODO 5: Before  we simulate the  HPP,  how many points  do you expect to see  and where you do expect to see them ?
+
+## let's see
+hpp_1d <- sim.HPP(lambda = lambda_1, min = S_1[1], max = S_1[2])
+print(hpp_1d); length(hpp_1d)
+
+{plot(1, type="n", xlab="clients arrival from 8h-18h", ylab="intensity lambda", main='HPP', xlim=S_1, ylim=c(0, lambda_1+1))
+abline(h=lambda_1, col='red')
+axis(1,  hpp_1d, labels = F, lwd=2, col.ticks = 'red', pch=4)
+}
+
+
+```
+
+
+
+```{r}
+
+## let's run some simulations and see if this happens on average 
+n_sim = 1000
+
+npoints.hpp =  replicate(n_sim,length(sim.HPP(lambda = lambda_1, min = S_1[1], max = S_1[2] )))
+
+{hist(npoints.hpp,main= ' ') 
+abline(v=mean(npoints.hpp),col='red') 
+abline(v=lambda_1,col='blue' )
+legend(x=60, y = n_sim/5,
+       legend=c('average # of clients',  'expected # clients'), fill=c('red', 'blue' ), horiz=F)}
+
+print(mean(npoints.hpp))
+```
+
+
+
+
+Say, we are interested in the number of arrivals  in a specific interval. For instance, we need to know how many clients might come between 11h and 13h so we allocate sufficient resources for them.  How many clients do you expect to see in $[11h-13h]$?
+
+```{r}
+region_interest_1d = c(11,13)
+
+lambda_1 = 3
+hpp_1d <- sim.HPP(lambda = lambda_1, min = S_1[1], max = S_1[2])
+{plot(1, type="n", xlab="clients arrival from 8h-18h", ylab="intensity lambda", main='HPP', xlim=S_1, ylim=c(0, lambda_1+1))
+abline(h=lambda_1, col='red')
+abline(v=region_interest_1d,col='blue')
+#abline(v)
+axis(1,  hpp_1d, labels = F, lwd=2, col.ticks = 'red', pch=4)
+axis(1,  hpp_1d[which(hpp_1d >= region_interest_1d[1] & hpp_1d <=region_interest_1d[2] )], labels = F, lwd=2, col.ticks = 'blue', pch=4)
+}
+
+print(length(which(hpp_1d >= region_interest_1d[1] & hpp_1d <=region_interest_1d[2] )))
+```
+
+
+
+
+
+
+****
+
+
+Finally, before we move to 2D, is assuming the intensity constant reasonable ? Could we do better ?   We return to this later. 
+
+### Moving to 2D
+We are still working on HPP, but now in 2D.  So again we will simulate a HPP in 2D and build some intuition 
+
+```{r}
+## define the observation  window 
+winsize = 3
+win <- spatstat.geom::owin(c(0, winsize), c(0, winsize))
+lambda_2 = 5
+hpp_2d = rpoispp(lambda_2, win= win )
+
+##again before we run, how many points do you expect to see on average ? where do you expect to see the points ?
+
+{plot(hpp_2d$window,main= 'PP in 2D')
+points(hpp_2d$x, hpp_2d$y, col='red',pch=20,cex=1)
+axis(1)
+axis(2)
+}
+
+print(hpp_2d$n)
+```
+
+
+
+```{r}
+## let's run some simulations and see if this happens on average 
+n_sim = 1000
+
+npoints.hpp_2d =  replicate(n_sim,rpoispp(lambda_2, win= win )$n)
+
+{hist(npoints.hpp_2d, main = ' ' ) 
+abline(v=mean(npoints.hpp_2d),col='red') 
+abline(v=lambda_2,col='blue' )
+legend(x=50, y = n_sim/5,
+       legend=c('average # of points',  'expected # points'), fill=c('red', 'blue' ), horiz=F)}
+print(mean(npoints.hpp_2d))
+```
+
+**TODO 6: ** Assume we are interested in a specific region, say $[1,2]\times [1,2]$. How many points do you expect to see ?  Using the same ideas from 1D, plot a realization in 2D with the PP in red, then add a box  $[1,2]\times [1,2]$ and plot in blue the PP inside it.
+Finally, run a simulation and compute the average number of events in the region of interest.
+
+
+```{r}
+## ADD CODE HERE 
+
+```
+
+
+
+### How do we estimate $\lambda$ ?
+
+In  practice, we don't know  the intensity $\lambda$ and we would like to estimate it from, usually, one point pattern.  What is your guess ?
+
+
+**TODO 7:** Derive the likelihood function for a HPP  and  find the maximum likelihood estimator.
+
+```{r}
+## DERIVE  IN CLASS
+
+```
+
+
+
+
+
+### Computing other measures 
+ 
+Let's go back to the 1D example  about the arrivals time. An experienced employee was worried about this expected number and is willing to know the probability of receiving more than 10 clients during the interval  $[11h-13h]$?.  This is related to exceedance probability.  Remember that for any  bounded Borel set $B$, the number of events in $B$ is a random variable with Poisson distribution and mean $\int_{B} \lambda(s) ds$.  
+
+```{r}
+region_interest_1d
+ppois(10,lambda = diff(region_interest_1d)*lambda_1, lower.tail = F)
+
+```
+
+
+### Takeaway from  HPP ?
+
+
+
+
+
+
+## Non Homogeneous Poisson Process with deterministic intensity. 
+
+Let's go back to the arrivals time in 1D: **is assuming the intensity constant reasonable ? Could we do better ?**  Indeed, it makes sense to assume that the intensity changes over time.   
+
+
+### Some intuition in 1D
+
+For simplicity, let's define the intensity function as a quadratic function of time:
+
+$$ \lambda(x) = -0.2\times(x-8)\times(x-18), \;\; x \in [8,18]$$
+
+Can you interpret this intensity ? 
+
+```{r}
+lambda_nhpp = function(x){
+  -0.2*(x-8)*(x-18)
+}
+
+curve(lambda_nhpp,S_1[1],S_1[2], xlab='arrival times', ylab= 'intensity',   main='Deterministic intensity function', col='red')
+
+```
+
+
+
+Before, we simulate, what is the expected number of arrivals when assuming this intensity function ?  
+
+```{r}
+## How to obtain this in R, without doing by hand 
+expected.nhpp_1d = integrate(lambda_nhpp, lower= S_1[1] , upper = S_1[2])
+print(expected.nhpp_1d)
+```
+
+Now, let's simulate one realization and see how many points we obtain.
+
+```{r}
+nhpp_1d  = sim.NHPP(lambda_nhpp, lambda_nhpp(13), min= S_1[1], max= S_1[2])
+print(length(nhpp_1d))
+
+
+```
+
+
+How do you expect the arrival to be scattered ? 
+
+```{r}
+nhpp_1d  = sim.NHPP(lambda_nhpp, lambda_nhpp(13), min= S_1[1], max= S_1[2])
+{curve(lambda_nhpp,S_1[1],S_1[2], xlab='arrival times', ylab= 'intensity',   main='NHPP in 1D', col='red')
+axis(1, nhpp_1d , labels = F, lwd=2, col.ticks = 'red', pch=4)
+}
+```
+
+
+**TODO 8: ** run many realizations from the NHPP and compare the average number of events to the expectation. 
+
+```{r}
+## ADD CODE HERE 
+
+```
+
+
+
+
+### How to estimate $\lambda(s)$ in this case ?
+
+We only observe the data, and we would like to recover the underlying intensity. 
+
+```{r}
+nhpp_1d  = sim.NHPP(lambda_nhpp, lambda_nhpp(13), min= S_1[1], max= S_1[2])
+{plot(1, type="n", xlab="clients arrival from 8h-18h", ylab="intensity lambda", main='NHPP in 1D', xlim=S_1, ylim=c(0, 15))
+  #curve(lambda_nhpp,S_1[1],S_1[2], xlab='arrival times', ylab= 'intensity',   main='NHPP in 1D', col='red')
+axis(1, nhpp_1d , labels = F, lwd=2, col.ticks = 'red', pch=4)
+}
+```
+
+**TODO 9: ** Derive the likelihood function  
+
+```{r}
+## ADD CODE HERE 
+
+```
+
+
+
+## NHPP with stochastic intensity:  Log Gaussian Cox Process
+The Log Gaussian Cox Process (LGCP) is the non-homogeneous Poisson Process  with intensity surface $\lambda(s)$  where $\log \lambda(s)$ is a Gaussian Field  with mean function that could also depends on covariates. For the sake of simplicity,  we restrict ourselves to  $\boldsymbol{S} = \mathbb{R}^2$.  This is a doubly stochastic process:
+
+1. The Log of the intensity is a Gaussian Field
+
+2. Conditional on the intensity, the point process is Poisson.
+
+Let's simulate some realizations. Again, how do you expect the points to be scattered, and how many points ?  
+
+```{r}
+## simulate log lambda from a matern with mean 1, nu=2, kappa =1 , prec =1 
+
+nlgcp_1d= sim.LGCP(min=S_1[1],max=S_1[2])
+
+```
+
+Now, things are a bit more complicated. Because, as the intensity is stochastic, so is its integral. That's why you cannot guess well the distribution and number of points. This makes the LGCP very versatile as it can capture many forms of the intensity function.
+
+
+
+## Important comment about RINLA 
+
+**So far, I haven't said a word about using R-INLA to fit these very simple models. The reason is that in RINLA, there isn't any likelihood family called** *poisson process or lgcp or point process*, **due to the integral** $\int \lambda(s)ds$ **in the likelihood formula.  As a consequence, we need to compute or approximate this integral and then identify the correspondent likelihood family. There is a general trick to solve this issue,  we will see it soon and this is where our modeling journey will begin. !!! **
+
+
+
+## Fitting a Poisson Point Process: the RINLA way
+
+In **R-INLA**, we mainly have two strategies to fit PPP:  
+
+1. **Lattice or grid Approach: ** we create a grid over a domain and model the number of points in each cell as independent Poisson random variables. This leads us to traditional hierarchical  or areal data models.
+
+
+```{r}
+## WRITE THE FULL MODEL: DERIVE IN CLASS
+```
+
+
+2. **Going off grid approach: ** we use the SPDE approach to handle the Gaussian Field and use any numerical integration strategy to approximate the integral of the intensity.  
+
+
+```{r}
+## WRITE THE FULL MODEL: DERIVE IN CLASS
+```
+
+
+
+Now, we will go back to the Chorley dataset on larynx cancer and try to reproduce the original paper where the question of interest was to check any association between the incinerator and the cancer cases.  The distance between locations and the incinerator serves as covariates.   Here, we  use the lattice approach and  consider two models: 
+
+
+1.**Model 1: **  intercept +  spatial effect (matern2d)  
+
+2. **Model 2: **  intercept  +  distance spatial effect (matern2d)
+
+
+
+**IMPORTANT: ** the matern2d model is defined for regular grid and was the available method before the SPDE approach which is the formal way of handling Gaussian field in RINLA. Thus we're only using the matern2d for tutorial purpose and to practice your areal data modeling skills. In practice, **never use it**  for irregular grid and go for the SPDE. 
+
+
+```{r the chorley dataset}
+##  larynx cancer
+larynx <- chorley[chorley$marks == "larynx"]
+larynx <- unique(ppp(x = larynx$x, y = larynx$y, window = larynx$window))
+
+{plot(larynx, cols = "green", pch = 20, cex = 0.5, main = "larynx-cancer cases")
+points(chorley.extra$incin$x, chorley.extra$incin$y, pch= 10, col='blue', cex= 2)
+}
+
+```
+
+
+
+### Lattice approach
+
+```{r model 1 and 2 }
+## let's grid the domain, 
+resolution <- 0.5   ##  to obtain real range = estimated range * resolution
+
+map <- as(st_as_sf(larynx$window), "Spatial") # Convert it to a `SpatialPolygonsDataFrame` object
+map$cancer <- "larynx"
+r <- raster(map, resolution = resolution) # Create a `raster` object based on the map and resolution
+(n_row <- nrow(r))
+(n_col <- ncol(r))
+
+r[] <- 0 # Set all `NA` to `0`
+dpts <- SpatialPoints(cbind(rev(larynx$x), rev(larynx$y))) # Convert the locations to a `SpatialPoints` object
+
+## get number of points per cell 
+tab <- table(cellFromXY(r, dpts))
+r[as.numeric(names(tab))] <- tab # Assign the number of observed events to the `raster` object
+plot(r)
+
+
+## get coordinates of every cell 
+cell_coords = xyFromCell(r, 1: (nrow(r)*ncol(r)))
+cell_coords = rbind(cell_coords, c(chorley.extra$incin$x, chorley.extra$incin$y))
+dist_vec = unname(as.matrix(dist(cell_coords,upper=T))[, nrow(cell_coords)][-nrow(cell_coords)])  ## compute distance between points
+
+r$dist = dist_vec
+
+
+grid <- rasterToPolygons(r) # Convert it to a `SpatialPolygonsDataFrame` object
+
+grid <- grid[as.vector(matrix(1:nrow(grid), nrow = n_row, ncol = n_col, byrow = T)), ] # Rearrange the indices numbering
+
+grid$id <- 1:nrow(grid)
+grid$Y <- grid$layer
+grid$cellarea <- resolution * resolution
+plot(grid)
+gridmap <- raster::intersect(x = grid, y = map) # Compute the intersection between `grid` and `map`
+grid <- grid[grid$id %in% gridmap$id, ]; rm(gridmap)
+
+plot(grid);plot(map, border = "red", lwd = 1, add = T)
+
+
+prior.list = list(range = list(param = c(1.5, 2), prior = "loggamma"), prec = list(param=c(1.5, 2), prior = "loggamma"))
+
+plot(seq(0, 10, by = 0.1),dgamma(seq(0, 10, by = 0.1),shape = 1.5, scale = 2), type = "l")
+```
+
+
+Model 1
+
+```{r, warning=FALSE}
+
+formula.model_1 <- Y ~ 1  + f(id, model = "matern2d", nrow = n_row, ncol = n_col, nu = 1, hyper = prior.list) 
+model_1 <- inla(formula.model_1,
+            family = "poisson",
+            data = grid@data,
+            E = cellarea,
+            control.compute = list(dic=T, waic=T)) 
+
+summary(model_1)
+
+```
+
+Model 2
+
+```{r}
+formula.model_2 <- Y ~ 1 + dist + f(id, model = "matern2d", nrow = n_row, ncol = n_col, nu = 1, hyper = prior.list) 
+model_2 <- inla(formula.model_2,
+            family = "poisson",
+            data = grid@data,
+            E = cellarea,
+            control.compute = list(dic=T, waic=T)) 
+
+summary(model_2)
+
+
+```
+
+
+Remember the original problem: Is there any distance effect  to the larynx cancer cases ?   
+
+```{r}
+plot(model_2$marginals.fixed$dist,type='l', xlab=' effect of distance to incinerator'); abline(v=0,col='red')
+```
+
+
+Let's take a look at other measures as well:
+
+
+```{r}
+data.frame(Model=c('model 1', 'model 2 '),
+           DIC= c(model_1$dic$dic,model_2$dic$dic),
+           WAIC= c(model_1$waic$waic, model_2$waic$waic),
+           Est_counts = c( sum(grid$cellarea*model_1$summary.fitted.values$mean) ,
+                           sum(grid$cellarea*model_2$summary.fitted.values$mean) ) )
+
+```
+
+
+Let's look at fitted values,  standard deviation and random effects.
+
+```{r}
+### extrating fitted values for both models
+grid$fitted.model1 <- model_1$summary.fitted.values$mean 
+grid$fitted.model2 <- model_2$summary.fitted.values$mean
+
+
+##extracting sd for both models
+grid$sd.model.1 <- model_1$summary.random$id[grid$id, "sd"] 
+grid$sd.model.2 <- model_2$summary.random$id[grid$id, "sd"]
+
+## extracting spatial effects
+grid$rand.eff.model1 <- model_1$summary.random$id[grid$id, "mean"] 
+grid$rand.eff.model2 <- model_2$summary.random$id[grid$id, "mean"]
+
+
+## plotting outputs
+sf_xy  =  st_as_sf(as.data.frame(cbind(larynx$x,larynx$y)),coords=c('V1','V2'))
+sf_inc =  st_as_sf(as.data.frame(cbind(chorley.extra$incin$x,chorley.extra$incin$y)),coords=c('V1','V2'))
+grid.arrange(ggplot(st_as_sf(grid))+geom_sf(aes(fill= fitted.model1)) +  geom_sf(data = sf_xy,col='red',cex=0.3)+ 
+               geom_sf(data = sf_inc,col='green',cex=1,pch=10) + scale_fill_gradient2(),
+             ggplot(st_as_sf(grid))+geom_sf(aes(fill= fitted.model2))  +  geom_sf(data = sf_xy,col='red',cex=0.3)+  geom_sf(data = sf_inc,col='green',cex=1, pch=10)+ scale_fill_gradient2() ,
+             ggplot(st_as_sf(grid))+geom_sf(aes(fill= sd.model.1)) +   scale_fill_gradient2(),
+             ggplot(st_as_sf(grid))+geom_sf(aes(fill= sd.model.2)) +   scale_fill_gradient2(),
+             ggplot(st_as_sf(grid))+geom_sf(aes(fill= rand.eff.model1)) +   scale_fill_gradient2(),
+             ggplot(st_as_sf(grid))+geom_sf(aes(fill= rand.eff.model2)) +   scale_fill_gradient2(),
+             nrow=3,ncol=2)
+
+
+```
+
+
+
+
+### Going off grid approach; INLA way 
+
+```{r}
+data('burkitt')
+
+{plot(burbdy, bty = 'n', type = "l", asp = 1)
+with(burkitt, points(x, y,cex=1,pch=20,col='blue'))
+}
+
+## data as sf
+bkt <- st_as_sf(burkitt, coords = c("x", "y"))   ## events 
+bnd <- st_sf(st_sfc(st_polygon(list(burbdy))))   ## 
+n = nrow(bkt)
+
+###  mesh 
+mesh <- fm_mesh_2d(
+    boundary = bnd, 
+    max.edge = c(2, 15),
+    cutoff = 2)
+
+(nv = mesh$n)
+plot(mesh)
+
+### dual mesh 
+dmesh = book.mesh.dual(mesh)  %>%  st_as_sf()
+plot(dmesh)                       
+
+## intersect dual mesh with the domain  and get weight for each node 
+intersect_domain_mesh=st_intersection(dmesh, bnd)
+plot(intersect_domain_mesh)
+
+## which nodes are inside the boundary
+intersect_domain = st_intersects(dmesh, bnd)
+orig_w = apply(intersect_domain,1,function(x)x>0)
+w_aux = st_area(intersect_domain_mesh)
+w = rep(0,nv)
+w[orig_w] = w_aux 
+length(w);sum(w); st_area(bnd)
+
+
+## prepare data to stack
+y.pp <- rep(0:1, c(nv, n))
+e.pp <- c(w, rep(0, n)) 
+imat <- Diagonal(nv, rep(1, nv)) ## mesh node projection matrix
+lmat <- inla.spde.make.A(mesh, bkt) ## location node projection matrix
+dim(lmat)
+A.pp <- rbind(imat, lmat)
+
+## create stack 
+stk.pp <- inla.stack(
+  data = list(y = y.pp, e = e.pp), 
+  A = list(1, A.pp),
+  effects = list(list(b0 = rep(1, nv + n)), list(i = 1:nv)),
+  tag = 'pp')
+
+
+## spde prior 
+spde.prior <- inla.spde2.pcmatern(
+    mesh = mesh,
+    prior.range = c(3, 0.01),
+    prior.sigma = c(0.3, 0.01)
+)
+
+
+## models with new likelihood
+model.bkt =  inla(y ~ 0 + b0 +   f(i, model = spde.prior) , 
+               family = 'poisson', data = inla.stack.data(stk.pp), 
+               control.predictor = list(link=1,A = inla.stack.A(stk.pp),compute=T), 
+               E = inla.stack.data(stk.pp)$e)
+
+summary(model.bkt)
+
+```
+
+
+```{r}
+### get the outside box
+bb <- matrix(st_bbox(bnd), 2)
+
+#apply(bb, 1, diff)
+
+## setup a grid
+grid <- fm_evaluator(
+    mesh = mesh,
+    xlim = bb[1,],
+    ylim =bb[2,],
+    dims = c(95, 182)
+  # , mask = bnd
+)
+
+#str(grid)
+
+## evaluate the field 
+spat.m <- fm_evaluate(
+    grid,
+    field = model.bkt$summary.random$i$mean)
+
+
+## improve the plot: set as NA outside the map
+ov <- over(SpatialPoints(grid$lattice$loc),
+          SpatialPolygons(list( Polygons(list(Polygon(burbdy)), '0') ))
+          )
+spat.m[is.na(ov)] <- NA
+
+{image(grid$x,
+      grid$y,
+      spat.m,
+      asp = 1, main ='estimated intensity')
+plot(bnd, add = TRUE)
+with(burkitt, points(x, y,cex=0.3,pch=20,col='blue'))}
+
+```
+```{r}
+## evaluate the field 
+spat.m <- fm_evaluate(
+    grid,
+    field = model.bkt$summary.random$i$sd)
+
+
+## improve the plot: set as NA outside the map
+ov <- over(SpatialPoints(grid$lattice$loc),
+          SpatialPolygons(list( Polygons(list(Polygon(burbdy)), '0') ))
+          )
+spat.m[is.na(ov)] <- NA
+
+{image(grid$x,
+      grid$y,
+      spat.m,
+      asp = 1, main ='sd intensity')
+plot(bnd, add = TRUE)
+#with(burkitt, points(x, y,cex=0.5,pch=20,col='blue'))
+}
+
+
+```
+
+
+
+### INLABRU way 
+
+
+```{r}
+data('burkitt')
+
+plot(burbdy, bty = 'n', type = "l", asp = 1)
+with(burkitt, points(x, y,cex=1,pch=20,col='blue'))
+
+## data as sf
+bkt <- st_as_sf(burkitt, coords = c("x", "y"))
+bnd <- st_sf(st_sfc(st_polygon(list(burbdy))))
+
+## mesh
+mesh <- fm_mesh_2d(
+    boundary = bnd, 
+    max.edge = c(5, 15),
+    cutoff = 2)
+
+## visualize
+ggplot() + theme_minimal() + 
+    geom_sf(data = bnd) +
+    gg(mesh) +
+    geom_sf(data = bkt) 
+
+## The spatial model
+spde <- inla.spde2.pcmatern(
+    mesh = mesh,
+    prior.range = c(5, 0.01),
+    prior.sigma = c(0.3, 0.01)
+)
+
+## model components 
+components <- ~  
+    Intercept(1) +        ## "inlabru" way of doing it
+    spatial(geometry,     ## index on the geometry
+            model = spde) ## the actual model definition
+
+## likelihood object
+lhood <- like(
+    geometry ~ .,         ## locations are the outcome
+    family = "cp",
+    data = bkt,
+    domain = list(geometry = mesh),
+    samplers = bnd)
+
+## fit the model
+fit <- bru(
+    components,
+    lhood)
+
+fit$cpu.used
+fit$bru_timings
+
+## summaries
+fit$summary.hyperpar
+
+## prepare for visualization
+post.range <- spde.posterior(fit, name = "spatial", what = "range")
+post.sigma <- spde.posterior(fit, name = "spatial", what = "variance")
+post.corr <- spde.posterior(fit, name = "spatial", what = "matern.correlation")
+
+## visualize
+grid.arrange(
+    plot(post.range),
+    plot(post.sigma),
+    plot(post.corr),
+    nrow = 1)
+
+fit$summary.fixed
+
+#nrow(burkitt) / st_area(bnd)
+#exp(-6.61)
+
+## the bounding box
+#st_bbox(bnd)
+bb <- matrix(st_bbox(bnd), 2)
+#bb
+
+#apply(bb, 1, diff)
+
+
+## setup a grid
+grid <- fm_pixels(
+    mesh = mesh,
+    dims = c(95, 182),
+    mask = bnd,
+    format = "sf")
+
+#str(grid)
+
+## inlabru::predict()
+##  drawn (Monte Carlo: independent) samples
+## from the model parameters posterior fitted by INLA
+## and compute functions from these
+pred <- predict(
+    fit, 
+    grid, 
+    ~ data.frame(
+    lambda = exp(spatial),
+    loglambda = spatial
+    )
+)
+
+
+#str(pred)
+
+## visualize
+ggplot() + theme_minimal() +
+    geom_sf(data = pred$loglambda,            
+            aes(color = mean)) +
+    scale_color_distiller(
+        palette = "Spectral"
+    ) +
+    geom_sf(data = bkt, cex = 0.1) +
+  theme(legend.title = element_blank(),
+        legend.key.height = unit(1, "null")) +
+  guides(colour = guide_colourbar(position = "right"))
+
+
+```
+
